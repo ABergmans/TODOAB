@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Inbox → Taken</title>
+<style>
+:root{--bg:#eef2f1;--panel:#fff;--ink:#1d2b3a;--mute:#6a7a88;--line:#d3dcd9;--accent:#0f6e8c;--rec:#d6452f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 80px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+h1{font-size:1.35rem;margin:0}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:8px 12px}
+button:focus-visible,textarea:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+#drop{background:var(--panel);border:2px dashed var(--line);border-radius:14px;padding:14px;transition:border-color .15s,background .15s}
+#drop.over{border-color:var(--accent);background:#e3f1f5}
+#drop textarea{width:100%;border:0;resize:none;font:inherit;color:inherit;background:transparent;min-height:56px}
+#drop textarea:focus{outline:none}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.bar .hint{color:var(--mute);font-size:.85rem;flex:1;min-width:180px}
+#mic.on{background:var(--rec);border-color:var(--rec);color:#fff}
+#interim{color:var(--mute);font-style:italic;min-height:1.4em;margin:6px 2px 0}
+.tabs{display:flex;gap:6px;margin:22px 0 8px}
+.tabs button[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;gap:12px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:8px}
+li input[type=checkbox]{width:22px;height:22px;margin-top:1px;accent-color:var(--accent);flex:none}
+li .t{flex:1;word-break:break-word}
+li.done .t{text-decoration:line-through;color:var(--mute)}
+li .src{font-size:.75rem;color:var(--mute)}
+li .x{border:0;background:none;color:var(--mute);padding:2px 6px}
+.empty{color:var(--mute);text-align:center;padding:28px 0}
+#auth{max-width:340px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+#auth input{width:100%;padding:10px;margin:0 0 10px;border:1px solid var(--line);border-radius:8px;font:inherit}
+#auth button{width:100%;margin-bottom:8px}
+#err{color:var(--rec);font-size:.9rem;min-height:1.2em}
+.hidden{display:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<section id="auth" class="hidden">
+  <h1>Inbox → Taken</h1>
+  <p style="color:var(--mute);margin-top:4px">Log in om je taken op al je apparaten te zien.</p>
+  <button class="primary" id="gBtn">Doorgaan met Google</button>
+  <input id="em" type="email" placeholder="E-mail" autocomplete="email">
+  <input id="pw" type="password" placeholder="Wachtwoord" autocomplete="current-password">
+  <button id="loginBtn">Inloggen</button>
+  <button id="regBtn">Account maken</button>
+  <div id="err" role="alert"></div>
+</section>
+
+<main id="app" class="hidden">
+  <header><h1>Inbox → Taken</h1><button id="outBtn">Uitloggen</button></header>
+
+  <div id="drop">
+    <textarea id="inp" rows="2" placeholder="Typ, plak of sleep hier iets in. Enter maakt er een taak van."></textarea>
+    <div class="bar">
+      <button id="mic" aria-pressed="false">🎤 Spreek in</button>
+      <button class="primary" id="add">Toevoegen</button>
+      <span class="hint">Sleep tekst, links, Outlook-mails (.msg/.eml) of afspraken (.ics) hierheen. Meerdere regels worden meerdere taken.</span>
+    </div>
+  </div>
+  <div id="interim" aria-live="polite"></div>
+
+  <div class="tabs" role="group" aria-label="Filter">
+    <button data-f="open" aria-pressed="true">Open</button>
+    <button data-f="done" aria-pressed="false">Klaar</button>
+    <button data-f="all" aria-pressed="false">Alles</button>
+  </div>
+  <ul id="list"></ul>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// ▼▼ VUL HIER JE EIGEN FIREBASE-CONFIG IN ▼▼
+const firebaseConfig = {
+  apiKey: "AIzaSyB_X36uuRzL8N4nmaDvSiXWXcysS4f-t2k",
+  authDomain: "todo-e2f12.firebaseapp.com",
+  projectId: "todo-e2f12",
+  storageBucket: "todo-e2f12.firebasestorage.app",
+  messagingSenderId: "881080818988",
+  appId: "1:881080818988:web:649b042d55a587d47ae089",
+  measurementId: "G-Y315HWDQF2"
+};
+// ▲▲ ----------------------------------- ▲▲
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = s => document.querySelector(s);
+let col = null, unsub = null, tasks = [], filter = "open";
+
+/* ---------- Auth ---------- */
+const showErr = e => $("#err").textContent = e.message.replace("Firebase: ", "");
+$("#gBtn").onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(showErr);
+$("#loginBtn").onclick = () => signInWithEmailAndPassword(auth, $("#em").value, $("#pw").value).catch(showErr);
+$("#regBtn").onclick = () => createUserWithEmailAndPassword(auth, $("#em").value, $("#pw").value).catch(showErr);
+$("#outBtn").onclick = () => signOut(auth);
+
+onAuthStateChanged(auth, user => {
+  if (unsub) { unsub(); unsub = null; }
+  $("#auth").classList.toggle("hidden", !!user);
+  $("#app").classList.toggle("hidden", !user);
+  if (!user) return;
+  col = collection(db, "users", user.uid, "tasks");
+  unsub = onSnapshot(query(col, orderBy("createdAt", "desc")), snap => {
+    tasks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    render();
+  });
+});
+
+/* ---------- Taken ---------- */
+async function addTasks(items, source = "getypt") {
+  if (!col) return;
+  for (const raw of items) {
+    const text = raw.trim();
+    if (text) await addDoc(col, { text, done: false, source, createdAt: serverTimestamp() });
+  }
+}
+const lines = t => t.split(/\r?\n/).map(l => l.replace(/^\s*(?:[-*•]|\d+[.)]|\[ \])\s*/, "")).filter(l => l.trim());
+
+function render() {
+  const ul = $("#list");
+  const shown = tasks.filter(t => filter === "all" || (filter === "done") === t.done);
+  ul.innerHTML = "";
+  if (!shown.length) {
+    ul.innerHTML = `<li class="empty" style="display:block;border:0;background:none">${filter === "done" ? "Nog niets afgevinkt." : "Niets te doen. Gooi hierboven iets in."}</li>`;
+    return;
+  }
+  for (const t of shown) {
+    const li = document.createElement("li");
+    li.className = t.done ? "done" : "";
+    const cb = Object.assign(document.createElement("input"), { type: "checkbox", checked: t.done });
+    cb.setAttribute("aria-label", "Afvinken");
+    cb.onchange = () => updateDoc(doc(col, t.id), { done: cb.checked });
+    const box = document.createElement("div"); box.className = "t";
+    const txt = document.createElement("span"); txt.textContent = t.text; txt.tabIndex = 0;
+    txt.title = "Dubbelklik om te wijzigen";
+    const edit = async () => {
+      const n = prompt("Taak wijzigen", t.text);
+      if (n && n.trim()) updateDoc(doc(col, t.id), { text: n.trim() });
+    };
+    txt.ondblclick = edit;
+    txt.onkeydown = e => { if (e.key === "Enter") edit(); };
+    const src = document.createElement("div"); src.className = "src"; src.textContent = t.source || "";
+    box.append(txt, src);
+    const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.setAttribute("aria-label", "Verwijderen");
+    x.onclick = () => deleteDoc(doc(col, t.id));
+    li.append(cb, box, x);
+    ul.append(li);
+  }
+}
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll(".tabs button").forEach(o => o.setAttribute("aria-pressed", o === b));
+  render();
+});
+
+/* ---------- Toetsenbord ---------- */
+const inp = $("#inp");
+const submit = () => { const v = inp.value; inp.value = ""; addTasks(lines(v)); };
+$("#add").onclick = submit;
+inp.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+});
+
+/* ---------- Spraak ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false;
+if (!SR) { $("#mic").disabled = true; $("#mic").title = "Spraakherkenning wordt niet ondersteund in deze browser (gebruik Chrome, Edge of Safari)."; }
+$("#mic").onclick = () => {
+  if (listening) { rec.stop(); return; }
+  rec = new SR(); rec.lang = "nl-NL"; rec.continuous = true; rec.interimResults = true;
+  rec.onstart = () => { listening = true; $("#mic").classList.add("on"); $("#mic").setAttribute("aria-pressed", "true"); $("#mic").textContent = "⏹ Stop"; };
+  rec.onresult = e => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) addTasks([r[0].transcript], "gesproken"); else interim += r[0].transcript;
+    }
+    $("#interim").textContent = interim;
+  };
+  rec.onerror = e => { $("#interim").textContent = e.error === "not-allowed" ? "Geef de browser toegang tot de microfoon." : "Spraakfout: " + e.error; };
+  rec.onend = () => { listening = false; $("#mic").classList.remove("on"); $("#mic").setAttribute("aria-pressed", "false"); $("#mic").textContent = "🎤 Spreek in"; setTimeout(() => $("#interim").textContent = "", 1500); };
+  rec.start();
+};
+
+/* ---------- Slepen & plakken (incl. Outlook) ---------- */
+const drop = $("#drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", async e => {
+  const dt = e.dataTransfer;
+  if (dt.files && dt.files.length) { for (const f of dt.files) await fromFile(f); return; }
+  const uri = dt.getData("text/uri-list"), txt = dt.getData("text/plain");
+  if (txt) addTasks(lines(txt), "gesleept");
+  else if (uri) addTasks(lines(uri), "link");
+});
+document.addEventListener("paste", e => {
+  if (document.activeElement === inp) return;
+  const t = e.clipboardData.getData("text/plain");
+  if (t) addTasks(lines(t), "geplakt");
+});
+
+async function fromFile(f) {
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  const base = f.name.replace(/\.[^.]+$/, "");
+  if (ext === "eml") {
+    const t = await f.text();
+    const m = t.match(/^Subject:\s*(.+)$/mi), from = t.match(/^From:\s*(.+)$/mi);
+    addTasks([(m ? m[1].trim() : base) + (from ? " (van " + from[1].replace(/<.*>/, "").trim() + ")" : "")], "Outlook-mail");
+  } else if (ext === "msg") {
+    addTasks([base], "Outlook-mail"); // bestandsnaam = onderwerp
+  } else if (ext === "ics") {
+    const t = await f.text();
+    const out = [];
+    for (const ev of t.split("BEGIN:VEVENT").slice(1)) {
+      const s = ev.match(/^SUMMARY[^:]*:(.+)$/mi), d = ev.match(/^DTSTART[^:]*:(\d{4})(\d\d)(\d\d)/mi);
+      if (s) out.push(s[1].trim() + (d ? ` (${d[3]}-${d[2]}-${d[1]})` : ""));
+    }
+    addTasks(out.length ? out : [base], "Outlook-agenda");
+  } else if (ext === "txt" || ext === "md") {
+    addTasks(lines(await f.text()), f.name);
+  } else {
+    addTasks([base], "bestand");
+  }
+}
+</script>
+</body>
+</html>
