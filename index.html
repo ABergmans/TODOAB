@@ -31,6 +31,17 @@ li .t{flex:1;word-break:break-word}
 li.done .t{text-decoration:line-through;color:var(--mute)}
 li .src{font-size:.75rem;color:var(--mute)}
 li .x{border:0;background:none;color:var(--mute);padding:2px 6px}
+.opts{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:2px 0 10px;font-size:.92rem}
+.opts label{display:flex;gap:6px;align-items:center}
+.opts input[type=date]{font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:8px;color:inherit;background:var(--panel)}
+.meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:.78rem;color:var(--mute);margin-top:4px}
+.badge{border:1px solid var(--line);border-radius:999px;padding:1px 10px;font-size:.78rem}
+.badge.zakelijk{background:#e0eef3;border-color:#bcd9e3;color:#0b556d}
+.badge.prive{background:#efe6f5;border-color:#d9c6e6;color:#5b3a78}
+.dl{display:flex;gap:5px;align-items:center}
+.dl.late{color:var(--rec);font-weight:600}
+.dl input{font:inherit;font-size:.78rem;border:1px solid var(--line);border-radius:6px;padding:1px 4px;color:inherit;background:var(--panel)}
+.tabs.second{margin-top:0}
 .empty{color:var(--mute);text-align:center;padding:28px 0}
 #auth{max-width:340px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
 #auth input{width:100%;padding:10px;margin:0 0 10px;border:1px solid var(--line);border-radius:8px;font:inherit}
@@ -58,6 +69,13 @@ li .x{border:0;background:none;color:var(--mute);padding:2px 6px}
 
   <div id="drop">
     <textarea id="inp" rows="2" placeholder="Typ, plak of sleep hier iets in. Enter maakt er een taak van."></textarea>
+    <div class="opts">
+      <span role="group" aria-label="Soort" style="display:flex;gap:14px">
+        <label><input type="radio" name="cat" value="zakelijk" checked> Zakelijk</label>
+        <label><input type="radio" name="cat" value="prive"> Privé</label>
+      </span>
+      <label>Deadline (optioneel) <input type="date" id="dl"></label>
+    </div>
     <div class="bar">
       <button id="mic" aria-pressed="false">🎤 Spreek in</button>
       <button class="primary" id="add">Toevoegen</button>
@@ -66,10 +84,15 @@ li .x{border:0;background:none;color:var(--mute);padding:2px 6px}
   </div>
   <div id="interim" aria-live="polite"></div>
 
-  <div class="tabs" role="group" aria-label="Filter">
+  <div class="tabs" id="status" role="group" aria-label="Status">
     <button data-f="open" aria-pressed="true">Open</button>
     <button data-f="done" aria-pressed="false">Klaar</button>
     <button data-f="all" aria-pressed="false">Alles</button>
+  </div>
+  <div class="tabs second" id="cats" role="group" aria-label="Soort">
+    <button data-f="all" aria-pressed="true">Privé + zakelijk</button>
+    <button data-f="zakelijk" aria-pressed="false">Zakelijk</button>
+    <button data-f="prive" aria-pressed="false">Privé</button>
   </div>
   <ul id="list"></ul>
 </main>
@@ -95,7 +118,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const $ = s => document.querySelector(s);
-let col = null, unsub = null, tasks = [], filter = "open";
+let col = null, unsub = null, tasks = [], filter = "open", catFilter = "all";
 
 /* ---------- Auth ---------- */
 const showErr = e => $("#err").textContent = e.message.replace("Firebase: ", "");
@@ -119,16 +142,22 @@ onAuthStateChanged(auth, user => {
 /* ---------- Taken ---------- */
 async function addTasks(items, source = "getypt") {
   if (!col) return;
+  const category = document.querySelector("input[name=cat]:checked").value;
+  const deadline = $("#dl").value || null;
   for (const raw of items) {
     const text = raw.trim();
-    if (text) await addDoc(col, { text, done: false, source, createdAt: serverTimestamp() });
+    if (text) await addDoc(col, { text, done: false, source, category, deadline, createdAt: serverTimestamp() });
   }
 }
 const lines = t => t.split(/\r?\n/).map(l => l.replace(/^\s*(?:[-*•]|\d+[.)]|\[ \])\s*/, "")).filter(l => l.trim());
 
 function render() {
   const ul = $("#list");
-  const shown = tasks.filter(t => filter === "all" || (filter === "done") === t.done);
+  const today = new Date().toLocaleDateString("sv-SE");
+  const NO = "9999";
+  const shown = tasks
+    .filter(t => (filter === "all" || (filter === "done") === t.done) && (catFilter === "all" || (t.category || "zakelijk") === catFilter))
+    .sort((a, b) => (a.deadline || NO) < (b.deadline || NO) ? -1 : (a.deadline || NO) > (b.deadline || NO) ? 1 : 0);
   ul.innerHTML = "";
   if (!shown.length) {
     ul.innerHTML = `<li class="empty" style="display:block;border:0;background:none">${filter === "done" ? "Nog niets afgevinkt." : "Niets te doen. Gooi hierboven iets in."}</li>`;
@@ -149,23 +178,37 @@ function render() {
     };
     txt.ondblclick = edit;
     txt.onkeydown = e => { if (e.key === "Enter") edit(); };
-    const src = document.createElement("div"); src.className = "src"; src.textContent = t.source || "";
-    box.append(txt, src);
+    const meta = document.createElement("div"); meta.className = "meta";
+    const made = t.createdAt && t.createdAt.toDate ? t.createdAt.toDate() : new Date();
+    const inv = document.createElement("span");
+    inv.textContent = "Ingevoerd " + made.toLocaleDateString("nl-NL", { day: "numeric", month: "short", year: "numeric" });
+    const cat = t.category || "zakelijk";
+    const badge = document.createElement("button");
+    badge.className = "badge " + cat; badge.textContent = cat === "prive" ? "Privé" : "Zakelijk";
+    badge.title = "Klik om te wisselen tussen privé en zakelijk";
+    badge.onclick = () => updateDoc(doc(col, t.id), { category: cat === "prive" ? "zakelijk" : "prive" });
+    const dl = document.createElement("label");
+    dl.className = "dl" + (!t.done && t.deadline && t.deadline < today ? " late" : "");
+    const di = Object.assign(document.createElement("input"), { type: "date", value: t.deadline || "" });
+    di.onchange = () => updateDoc(doc(col, t.id), { deadline: di.value || null });
+    dl.append("Deadline", di);
+    meta.append(inv, badge, dl);
+    box.append(txt, meta);
     const x = document.createElement("button"); x.className = "x"; x.textContent = "✕"; x.setAttribute("aria-label", "Verwijderen");
     x.onclick = () => deleteDoc(doc(col, t.id));
     li.append(cb, box, x);
     ul.append(li);
   }
 }
-document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
-  filter = b.dataset.f;
-  document.querySelectorAll(".tabs button").forEach(o => o.setAttribute("aria-pressed", o === b));
+document.querySelectorAll(".tabs").forEach(g => g.querySelectorAll("button").forEach(b => b.onclick = () => {
+  if (g.id === "status") filter = b.dataset.f; else catFilter = b.dataset.f;
+  g.querySelectorAll("button").forEach(o => o.setAttribute("aria-pressed", o === b));
   render();
-});
+}));
 
 /* ---------- Toetsenbord ---------- */
 const inp = $("#inp");
-const submit = () => { const v = inp.value; inp.value = ""; addTasks(lines(v)); };
+const submit = () => { const v = inp.value; inp.value = ""; addTasks(lines(v)); $("#dl").value = ""; };
 $("#add").onclick = submit;
 inp.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
